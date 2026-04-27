@@ -13,6 +13,13 @@ function vetcoreSupabaseAtivo() {
   return !!vetcoreSupabase;
 }
 
+function vetcoreComTimeout(promise, ms, fallbackValue) {
+  return Promise.race([
+    promise,
+    new Promise(resolve => setTimeout(() => resolve(fallbackValue), ms))
+  ]);
+}
+
 function vetcoreNormalizarUsuarioOnline(item) {
   const usuario = ((item && (item.usuario || item.email || item.login)) || "").trim().toLowerCase();
   if (!usuario) return null;
@@ -2090,78 +2097,85 @@ async function fazerLogin() {
   }
 
   if (btnEntrar) btnEntrar.classList.add("loading");
-  if (feedback) feedback.innerText = "Validando acesso no banco online...";
+  if (feedback) feedback.innerText = "Entrando...";
 
   const aliases = { "admin": "williamgomes990@gmail.com" };
   const usuarioComparacao = aliases[usuario] || usuario;
 
-  let usuarioValido = null;
+  const tentarLoginNaLista = (lista) => {
+    return (lista || []).map(vetcoreNormalizarUsuarioOnline).filter(Boolean).find(u => {
+      const loginPrincipal = ((u.usuario || "") + "").trim().toLowerCase();
+      const loginEmail = ((u.email || "") + "").trim().toLowerCase();
+      const loginAlt = ((u.login || "") + "").trim().toLowerCase();
+      const senhaSalva = ((u.senha || "") + "").trim();
 
-  // 1) Login online definitivo: busca todos os usuários e compara no navegador.
-  // Isso evita erro por espaço, maiúscula/minúscula ou diferença entre coluna email/usuario/login.
-  if (vetcoreSupabaseAtivo()) {
+      return senhaSalva === senha && (
+        loginPrincipal === usuarioComparacao ||
+        loginEmail === usuarioComparacao ||
+        loginAlt === usuarioComparacao
+      );
+    }) || null;
+  };
+
+  // Fallback local imediato para não deixar o sistema preso caso o Supabase demore ou a rede bloqueie DNS.
+  let usuariosLocais = [];
+  try { usuariosLocais = JSON.parse(localStorage.getItem("usuariosSistema")) || []; } catch (e) {}
+
+  const usuariosEmergencia = [
+    { usuario: "williamgomes990@gmail.com", email: "williamgomes990@gmail.com", senha: "Willi@m990", perfil: "admin", permissoes: permissoesPadraoAdmin },
+    { usuario: "ondaanimal.notas@gmail.com", email: "ondaanimal.notas@gmail.com", senha: "99069301", perfil: "admin", clinicaVinculada: "Onda Animal", clinicasVinculadas: ["Onda Animal"], permissoes: permissoesPadraoAdmin }
+  ];
+
+  let usuarioValido = tentarLoginNaLista([...usuariosPadrao, ...usuariosLocais, ...usuariosEmergencia]);
+
+  // Se não achou local, tenta online com limite de tempo curto.
+  if (!usuarioValido && vetcoreSupabaseAtivo()) {
     try {
-      const { data, error } = await vetcoreSupabase
-        .from("vetcore_usuarios")
-        .select("*");
+      const resposta = await vetcoreComTimeout(
+        vetcoreSupabase.from("vetcore_usuarios").select("*"),
+        5000,
+        { data: null, error: new Error("timeout") }
+      );
 
+      const { data, error } = resposta || {};
       if (error) throw error;
 
-      const listaOnline = (data || []).map(vetcoreNormalizarUsuarioOnline).filter(Boolean);
-      usuarioValido = listaOnline.find(u => {
-        const loginPrincipal = ((u.usuario || "") + "").trim().toLowerCase();
-        const loginEmail = ((u.email || "") + "").trim().toLowerCase();
-        const loginAlt = ((u.login || "") + "").trim().toLowerCase();
-        const senhaSalva = ((u.senha || "") + "").trim();
-        return senhaSalva === senha && (
-          loginPrincipal === usuarioComparacao ||
-          loginEmail === usuarioComparacao ||
-          loginAlt === usuarioComparacao
-        );
-      }) || null;
+      usuarioValido = tentarLoginNaLista(data || []);
 
-      // Se achou online, salva localmente também para o restante do sistema continuar funcionando.
       if (usuarioValido) {
-        let usuariosLocais = [];
-        try { usuariosLocais = JSON.parse(localStorage.getItem("usuariosSistema")) || []; } catch (e) {}
-        const loginFinal = ((usuarioValido.usuario || usuarioValido.email || usuarioComparacao) + "").trim().toLowerCase();
-        const idx = usuariosLocais.findIndex(u => (((u.usuario || u.email || u.login || "") + "").trim().toLowerCase() === loginFinal));
+        const loginFinalOnline = ((usuarioValido.usuario || usuarioValido.email || usuarioComparacao) + "").trim().toLowerCase();
+
+        // Se o usuário da Onda estiver sem clínica no Supabase, cria vínculo local para liberar a entrada.
+        if (loginFinalOnline === "ondaanimal.notas@gmail.com" && !(usuarioValido.clinicaVinculada || usuarioValido.clinica)) {
+          usuarioValido.clinicaVinculada = "Onda Animal";
+          usuarioValido.clinicasVinculadas = ["Onda Animal"];
+        }
+
+        let listaAtual = [];
+        try { listaAtual = JSON.parse(localStorage.getItem("usuariosSistema")) || []; } catch (e) {}
+
         const usuarioSalvar = {
           ...usuarioValido,
-          usuario: loginFinal,
-          login: usuarioValido.login || loginFinal,
-          email: usuarioValido.email || loginFinal,
+          usuario: loginFinalOnline,
+          login: usuarioValido.login || loginFinalOnline,
+          email: usuarioValido.email || loginFinalOnline,
           senha: senha,
           perfil: usuarioValido.perfil || "admin",
           permissoes: usuarioValido.permissoes || (typeof obterPermissoesPadraoPorPerfil === "function" ? obterPermissoesPadraoPorPerfil(usuarioValido.perfil || "admin") : permissoesPadraoAdmin)
         };
-        if (idx >= 0) usuariosLocais[idx] = { ...usuariosLocais[idx], ...usuarioSalvar };
-        else usuariosLocais.push(usuarioSalvar);
-        salvarUsuariosPermitidos(usuariosLocais);
+
+        const idx = listaAtual.findIndex(u => (((u.usuario || u.email || u.login || "") + "").trim().toLowerCase() === loginFinalOnline));
+        if (idx >= 0) listaAtual[idx] = { ...listaAtual[idx], ...usuarioSalvar };
+        else listaAtual.push(usuarioSalvar);
+
+        salvarUsuariosPermitidos(listaAtual);
         usuarioValido = usuarioSalvar;
       }
     } catch (erro) {
-      console.error("Erro no login online Supabase:", erro);
-      if (feedback) feedback.innerText = "Não consegui consultar o banco online. Verifique Supabase/RLS/chave.";
-      if (btnEntrar) btnEntrar.classList.remove("loading");
-      return;
+      console.warn("Login online indisponível, usando fallback local:", erro && erro.message ? erro.message : erro);
+      if (feedback) feedback.innerText = "Servidor online demorou. Tentando acesso local...";
+      usuarioValido = tentarLoginNaLista([...usuariosPadrao, ...usuariosLocais, ...usuariosEmergencia]);
     }
-  }
-
-  // 2) Fallback local, caso o banco esteja sem usuário mas o navegador já tenha dados.
-  if (!usuarioValido) {
-    const usuarios = garantirEstruturaUsuarios();
-    usuarioValido = usuarios.find(u => {
-      const loginPrincipal = ((u && u.usuario) || "").trim().toLowerCase();
-      const loginAlternativo = ((u && u.login) || "").trim().toLowerCase();
-      const loginEmail = ((u && u.email) || "").trim().toLowerCase();
-      const senhaSalva = (((u && u.senha) || "") + "").trim();
-      return senhaSalva === senha && (
-        loginPrincipal === usuarioComparacao ||
-        loginAlternativo === usuarioComparacao ||
-        loginEmail === usuarioComparacao
-      );
-    }) || null;
   }
 
   if (!usuarioValido) {
@@ -2171,7 +2185,14 @@ async function fazerLogin() {
   }
 
   const loginParaSalvar = (((usuarioValido.usuario || usuarioValido.email || usuarioComparacao) + "").trim().toLowerCase());
-  const clinicaVinculada = (usuarioValido.clinicaVinculada || usuarioValido.clinica || "").trim();
+  let clinicaVinculada = (usuarioValido.clinicaVinculada || usuarioValido.clinica || "").trim();
+
+  if (loginParaSalvar === "ondaanimal.notas@gmail.com" && !clinicaVinculada) {
+    clinicaVinculada = "Onda Animal";
+    usuarioValido.clinicaVinculada = "Onda Animal";
+    usuarioValido.clinicasVinculadas = ["Onda Animal"];
+  }
+
   const bloqueioClinica = clinicaVinculada ? vetcoreMensagemBloqueioClinica(clinicaVinculada) : "";
   if (bloqueioClinica) {
     if (feedback) feedback.innerText = bloqueioClinica;
@@ -4210,7 +4231,15 @@ document.addEventListener("DOMContentLoaded", async function () {
 garantirUsuarioMasterWilliam();
   garantirEstruturaUsuarios();
 
-  try { await vetcoreSincronizarBaseOnlineParaLocal(); } catch (erro) { console.warn("VetCore online inicialização:", erro); }
+  try {
+    await vetcoreComTimeout(
+      vetcoreSincronizarBaseOnlineParaLocal(),
+      2500,
+      null
+    );
+  } catch (erro) {
+    console.warn("VetCore online inicialização:", erro);
+  }
 
   if (!localStorage.getItem("configuracoesSistema")) {
     salvarConfiguracoesSistemaStorage(obterConfiguracoesSistema());

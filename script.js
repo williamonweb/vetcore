@@ -3,11 +3,13 @@
 // Mantém o sistema funcionando como antes, mas sincroniza dados
 // importantes online para abrir em vários computadores.
 // ============================================================
-const VETCORE_SUPABASE_URL = "https://banpsoevrpvhncgjhglz.supabase.co";
+const VETCORE_SUPABASE_URL = "https://banpsoevrpyhncgjhglz.supabase.co";
 const VETCORE_SUPABASE_KEY = "sb_publishable_ZtXkeXO1wGAv5iauqIGY2Q_KYyftrZe";
 const vetcoreSupabase = (window.supabase && window.supabase.createClient)
   ? window.supabase.createClient(VETCORE_SUPABASE_URL, VETCORE_SUPABASE_KEY)
   : null;
+
+window.vetcoreSupabase = vetcoreSupabase;
 
 function vetcoreSupabaseAtivo() {
   return !!vetcoreSupabase;

@@ -1,0 +1,1 @@
+Substitua index.html e script.js no projeto. Esta versão corrige o login para buscar no Supabase pela coluna email + senha. Depois faça git add ., git commit e git push.

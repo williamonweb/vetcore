@@ -1,0 +1,10 @@
+AJUSTE - HORÁRIOS DE RETORNO
+
+Alteração realizada:
+- Retorno agora herda os dias liberados da agenda principal do profissional quando não houver liberação própria.
+- Retorno passa a ter horários próprios entre consultas.
+- Se o profissional não tiver horários específicos de Retorno, o sistema gera automaticamente horários como 09:05, 10:05, 11:05, 14:05, 15:05 etc. a partir da agenda base.
+- Se desejar horários diferentes para Retorno, basta configurar horários específicos do serviço Retorno para o profissional.
+
+Objetivo:
+Permitir encaixar retornos entre uma consulta e outra, seguindo o modelo de agenda usado na clínica.
